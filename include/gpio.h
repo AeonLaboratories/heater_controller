@@ -46,7 +46,7 @@
 // PA6 = OUT: -PWM6
 // PA5 = OUT: TXD0 (Alt. function)
 // PA4 = IN: RXD0 (Alt. function)
-// PA3 = OUT: D (TC select)
+// PA3 = OUT: INH0
 // PA2 = OUT: C (TC select)
 // PA1 = OUT: B (TC select)
 // PA0 = OUT: A (TC select)

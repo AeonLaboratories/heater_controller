@@ -15,9 +15,6 @@
 #define LINE_FREQ				60
 #define HC_FREQ					(2 * LINE_FREQ)		// half-cycle frequency
 
-#define CHANNELS				6
-#define CHP_PER_CU_MIN			12	// min channel pulses per update
-
 ///////////////////////////////////////////////////////
 // To avoid rounding/truncation headaches, choose
 // timer frequencies that are factors of the system
@@ -53,12 +50,26 @@
 ///////////////////////////////////////////////////////
 
 
+// These values can be optimized by running a step
+// test to find the plant dead time
+#define DU_PERIOD					2		// seconds (determine by PID step analysis)
+#define PULSES_PER_DU				54		// pulses per device update (integer multiple of CO_FREQ)
+
+#define CHANNELS					6		// maximum controlled devices
+
+// Controller responsiveness may be improved
+// by distributing device updates over multiple 
+// controller updates.
+// Set CU_FOR_ALL = 1 if all devices are updated
+// every controller update.
+// Set CU_FOR_ALL = (CHANNELS) if each controller update
+// initiates only one device update.
+#define CU_FOR_ALL				(CHANNELS)	// controller updates needed to update all devices
+
 // Frequencies of services periodically initiated by isr_timer0()
 //
-// Manually calculate CU_FREQ = ceiling(CO_FREQ / CHP_PER_CU_MIN)
-//
-#define CO_FREQ					25			// control output pulse frequency
-#define CU_FREQ					2			// controller update frequency
+#define CO_FREQ					27			// control output pulse frequency
+#define CU_FREQ					3			// controller update frequency
 #define SERVICE_FREQ			1			// anything besides CO and CU
 
 // SERVICE_FREQ is for things other than CO and 
@@ -71,7 +82,7 @@
 // Set T0_FREQ to the least common integer multiple of 
 // 		CO_FREQ, CU_FREQ, and SERVICE_FREQ
 //
-#define T0_FREQ					50
+#define T0_FREQ					(CO_FREQ)	// required by T1/T0 isr on/off scheme
 
 // Manually calculate and enter the following values. They 
 // must be integers. Later conditional expressions will 
@@ -79,9 +90,9 @@
 // present in the computation, even if the resultant 
 // evaluation turns out to be an integer.
 //
-#define CO_PERIOD				2			// (T0_FREQ / CO_FREQ)
-#define CU_PERIOD				25			// (T0_FREQ / CU_FREQ)
-#define SERVICE_PERIOD			50			// (T0_FREQ / SERVICE_FREQ)
+#define CO_PERIOD				1			// FLOOR(T0_FREQ / CO_FREQ)
+#define CU_PERIOD				9			// FLOOR(T0_FREQ / CU_FREQ)
+#define SERVICE_PERIOD			27			// FLOOR(T0_FREQ / SERVICE_FREQ)
 
 
 ///////////////////////////////////////////////////////
@@ -133,7 +144,7 @@
 // 
 // #define T0_PRESCALE = 	(LOWEST POWER OF 2 >= SYS_FREQ / TIMER_MAX / T0_FREQ)
 //
-#define T0_PRESCALE				2
+#define T0_PRESCALE				4
 
 
 ///////////////////////////////////////////////////////
@@ -155,7 +166,7 @@
 // 
 // #define T1_PRESCALE = 	(LOWEST POWER OF 2 >= SYS_FREQ / TIMER_MAX / T0_FREQ * CO_PERIOD)
 //
-#define T1_PRESCALE				4
+#define T1_PRESCALE				T0_PRESCALE		// required by T1/T0 isr on/off scheme
 //
 // For maximum pulse-duration precision, set T1's 
 // prescale to 1. The maximum CO pulse width and
@@ -185,16 +196,22 @@
 
 ///////////////////////////////////////////////////////
 // ADC configuration
-#define ADC_SETTLING_TIME		35	// in AdcdReads
-#define ADC_CTL0_INIT				(ADC_CONT | ADC_CEN)	// continuous mode
-//#undef ADC_CTL0_INIT										// one-shot mode
+// ADC_SETTLING_TIME reserves time for the adc switching
+// network to stabilize after a new ADC channel is
+// selected. This typically takes about 45 ADC reads or
+// so (~2.1 ms). Additionally, the reading rate may be
+// reduced by increasing this value (max 254) above what
+// is required for a stable reading.
+#define ADC_SETTLING_TIME		50
+#define ADC_CTL0_INIT			(ADC_CONT | ADC_CEN)	// continuous mode
+//#undef ADC_CTL0_INIT									// one-shot mode
 
 
 
 ///////////////////////////////////////////////////////
 // Implementation-specific IRQ priorities
-#define EI_T0()					IRQ0_PRIORITY_HIGH(IRQ_T0);
-#define EI_RX()					IRQ0_PRIORITY_LOW(IRQ_U0R)
+#define EI_T0()					IRQ0_PRIORITY_NOMINAL(IRQ_T0);
+#define EI_RX()					IRQ0_PRIORITY_HIGH(IRQ_U0R)
 #define EI_TX()					IRQ0_PRIORITY_LOW(IRQ_U0T)
-#define EI_ADC()				IRQ0_PRIORITY_LOW(IRQ_ADC);
-#define EI_T1()					IRQ0_PRIORITY_NOMINAL(IRQ_T1);
+#define EI_ADC()				IRQ0_PRIORITY_HIGH(IRQ_ADC);
+#define EI_T1()					IRQ0_PRIORITY_HIGH(IRQ_T1);
