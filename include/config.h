@@ -178,11 +178,10 @@
 //
 ///////////////////////////////////////////////////////
 
+
 ///////////////////////////////////////////////////////
 // UART/RS232/RX/TX/serial communications speed
 #define SYS_BAUD				BAUD_115200
-
-
 
 ///////////////////////////////////////////////////////
 // serial data received and transmission buffers
@@ -192,26 +191,45 @@
 #define RXB_SIZE				32
 #define TXB_SIZE				128
 
+///////////////////////////////////////////////////////
+// Uncomment these #define's to use optional uart.c
+// functions; comment out unused ones to save memory.
+//
+//#define _PEEK
+#define _ISDIGIT
+//#define _ISLOWER
+//#define _ISUPPER
+//#define _ISLETTER
+//#define _PRINTFARSTR
+#define _PRINTROMSTR
 
 
 ///////////////////////////////////////////////////////
 // ADC configuration
 // ADC_SETTLING_TIME reserves time for the adc switching
 // network to stabilize after a new ADC channel is
-// selected. This typically takes about 45 ADC reads or
-// so (~2.1 ms). Additionally, the reading rate may be
-// reduced by increasing this value (max 254) above what
-// is required for a stable reading.
-#define ADC_SETTLING_TIME		50
+// selected. This typically takes about 30 ADC reads.
+// The reading rate may be reduced by increasing this
+// value (max 254) above what is required for a stable 
+// reading.
+#define ADC_SETTLING_TIME		30
 #define ADC_CTL0_INIT			(ADC_CONT | ADC_CEN)	// continuous mode
 //#undef ADC_CTL0_INIT									// one-shot mode
 
+// Consecutive readings are considered "significantly different" 
+// if their adc counts differ by more than this:
+#define ADC_DELTA_LIMIT			1
+
+// The input is considered stable if this many consecutive
+// readings aren't "significantly different"
+#define ADC_STABLE				3
 
 
 ///////////////////////////////////////////////////////
 // Implementation-specific IRQ priorities
-#define EI_T0()					IRQ0_PRIORITY_NOMINAL(IRQ_T0);
-#define EI_RX()					IRQ0_PRIORITY_HIGH(IRQ_U0R)
+#define EI_T0()					IRQ0_PRIORITY_HIGH(IRQ_T0);
+#define EI_T1()					IRQ0_PRIORITY_NOMINAL(IRQ_T1);
+#define EI_RX()					IRQ0_PRIORITY_LOW(IRQ_U0R)
 #define EI_TX()					IRQ0_PRIORITY_LOW(IRQ_U0T)
-#define EI_ADC()				IRQ0_PRIORITY_HIGH(IRQ_ADC);
-#define EI_T1()					IRQ0_PRIORITY_HIGH(IRQ_T1);
+#define EI_ADC()				IRQ0_PRIORITY_LOW(IRQ_ADC);
+

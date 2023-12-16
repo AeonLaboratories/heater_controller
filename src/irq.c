@@ -1,10 +1,12 @@
 ///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
 // irq.c
 //
 // heater controller
 
 #include <eZ8.h>
 #include <defines.h>
+#include <LIMITS.H>
 #include "..\\..\\common_controller\\include\\c99types.h"
 #include "..\\..\\common_controller\\include\\z082a.h"
 #include "..\\..\\common_controller\\include\\timer.h"
@@ -14,12 +16,13 @@
 #include "config.h"
 #include "error.h"
 #include "gpio.h"
+#define INVERT(b) { if(*b) *b = FALSE; else *b = TRUE; }
 
 // Store big strings in ROM to conserve RData and EData space.
-rom char FIRMWARE[]	= R"Aeon Laboratories HC6 ";
-rom char VERSION[]	= R"V.20190412-0000";
+rom char FIRMWARE[]	= R"Aeon Laboratories HC6-C ";
+rom char VERSION[]	= R"V.20230109-0000";
 
-#define SERNO					20
+#define SERNO					60
 
 #define TC_CHANNELS				16
 #define HTR_CHANNELS			6
@@ -27,99 +30,22 @@ rom char VERSION[]	= R"V.20190412-0000";
 #define AIN_TC					1		// TEMP_SENSE signal is on ANA1
 #define AIN_CJ					2		// CJTEMP signal is on ANA2
 
-#define DFS						0.99	// digital filter stability
+// these defines are intended for debugging / tuning
+//#define RAW_TC							// omit TC digital filter
+//#define TC_AVERAGING						// include weighted averaging filter
+//#define PI_CONTROL						// omit derivative component
+//#define SUPPRESSION						// ignore ADC data during output power pulses
 
 
 ///////////////////////////////////////////////////////
+// Calibration
 //
-// calibration
+// Because it must determine the ADC's input voltage 
+// from the ADC count, the code's "gain" values are 
+// the reciprocals of their hardware counterparts.
 //
-
 ///////////////////////////////////////////////////////
-//
-// The ADC count ranges from ~0 (whatever its internal 
-// offset is) to ~4096, when the input is at the 
-// reference voltage (~2000 mV, using the built-in ADC 
-// reference). So, the ADC sensitivity (i.e., its gain)
-// is very close to 0.4883 mV per count.
-//
-#define ADC_GAIN				0.4883	// mV/count
-
-// Set ADC_OFFSET to whatever the ADC reports when the 
-// input is 0V.
-#define ADC_OFFSET				0		// not used
-
-#define NO_CJ_SENSOR			ADC_OUTOFRANGE
-
-///////////////////////////////////////////////////////
-//
-// The CJ temperature sensor produces a voltage of
-// approximately 400 + 19.5 mV/degC. Thus, the 
-// CJ_GAIN (to convert ADC counts to degC) is about
-//
-#define CJ_GAIN					(ADC_GAIN / 19.5)
-//
-// The nominal CJOffset value would be
-//
-//  ~400 / ADC_GAIN = 819 counts
-//
-// However, the actual aggregate offset varies
-// significantly from nominal, because of device 
-// characteristics and especially the internal ADC 
-// offset.
-//
-// Calibrate the CJOffsets by independently
-// measuring each true CJ temperature and observing
-// the simultaneous value reported by this program.
-// The difference, divided by CJ_GAIN, gives the
-// error between the entered CJOffset and the correct
-// value
-//
-//	CJOffset = old_CJOffset + (CJt_reported - CJt_true) / CJ_GAIN
-//
-far int CJOffset[] = 
-#if SERNO == 2
-	{ 200, NO_CJ_SENSOR };
-#elif SERNO == 3				// AEON-CEGS
-	{ 703, 643 };
-#elif SERNO == 4				// AEON-CEGS
-	{ 673, NO_CJ_SENSOR };
-#elif SERNO == 5				// AEON-CEGS
-	{ 679, NO_CJ_SENSOR };
-#elif SERNO == 6
-	{ 169, 163 };
-#elif SERNO == 7
-	{ 165, 159 };
-#elif SERNO == 8
-	{ 118, NO_CJ_SENSOR };
-#elif SERNO == 9
-	{ 102, NO_CJ_SENSOR };
-#elif SERNO == 10
-	{ 200, NO_CJ_SENSOR};
-#elif SERNO == 11				// USGS-CEGS TC0
-	{ 535, NO_CJ_SENSOR};
-#elif SERNO == 12				// USGS-CEGS TC1
-	{ 535, NO_CJ_SENSOR};
-#elif SERNO == 13				// USGS-CEGS TC2
-	{ 639, 647 };
-#elif SERNO == 14				// Purdue CEGS TC0
-	{ 556, NO_CJ_SENSOR };
-#elif SERNO == 15				// Purdue CEGS TC1
-	{ 580, NO_CJ_SENSOR };
-#elif SERNO == 16				// Purdue CEGS TC2
-	{ 564, 592 };
-#elif SERNO == 17				// Dalhousie
-	{ 531, 523 };
-#elif SERNO == 18				// Dalhousie
-	{ 607, 607 };
-#elif SERNO == 19				// Dalhousie
-	{ 487, 567 };
-#elif SERNO == 20				// Aeon CEGS 2
-	{ 487, NO_CJ_SENSOR };
-#endif
-
-///////////////////////////////////////////////////////
-// Pre-amp & ADC compensation calibration:
+// Determining IA_ADC_OFFSET
 //
 // Check the ADC count with a TC input shorted.
 //     This count is the IA_ADC_OFFSET
@@ -129,99 +55,374 @@ far int CJOffset[] =
 // internal ADC offset and the instrumentation
 // amp offset.
 //	
-#if SERNO == 2
-	#define IA_ADC_OFFSET		134
-#elif SERNO == 3
-	#define IA_ADC_OFFSET		495
-#elif SERNO == 4
-	#define IA_ADC_OFFSET		487
-#elif SERNO == 5
-	#define IA_ADC_OFFSET		532
-#elif SERNO == 6
-	#define IA_ADC_OFFSET		141
-#elif SERNO == 7
-	#define IA_ADC_OFFSET		133
-#elif SERNO == 8
-	#define IA_ADC_OFFSET		119
-#elif SERNO == 9
-	#define IA_ADC_OFFSET		112
-//#elif SERNO == 10						// WHERE IS THIS HC??
-//	#define IA_ADC_OFFSET		133
-#elif SERNO == 11
-	#define IA_ADC_OFFSET		360
-#elif SERNO == 12
-	#define IA_ADC_OFFSET		385
-#elif SERNO == 13
-	#define IA_ADC_OFFSET		444
-#elif SERNO == 14
-	#define IA_ADC_OFFSET		398
-#elif SERNO == 15
-	#define IA_ADC_OFFSET		371
-#elif SERNO == 16
-	#define IA_ADC_OFFSET		404
-#elif SERNO == 17
-	#define IA_ADC_OFFSET		373
-#elif SERNO == 18
-	#define IA_ADC_OFFSET		406
-#elif SERNO == 19
-	#define IA_ADC_OFFSET		377
-#elif SERNO == 20
-	#define IA_ADC_OFFSET		461
-#endif
+///////////////////////////////////////////////////////
+// Determining ADC_GAIN_NEG and ADC_GAIN_POS
+//
+// The nominal ADC Gain (reciprocal) would be
+//		2000 / 4096 = 0.4883 mV/count.
+// But the true uncompensated value is variable, 
+// generally higher than nominal, and somewhat
+// nonlinear. A study of twelve example MCUs found
+// an average of 0.5823 +/- 0.0234 mV/count. This
+// variance is too great to rely on the average, so 
+// MCU-specific values are required. Additionally,
+// some of the nonlinearity can be corrected by
+// using separate gain values for counts below vs
+// above the offset.
+//
+// Start by estimating the ADC gain (use 0.5823 if a
+// prior value isn't available).
 //
 // Get the thermocouple to a known, controlled temperature
-// extreme (e.g., -195.8 in LN). Observe the cold junction
-// temperature (CJt) and the ADC count with the TC at the 
-// known temperature. Set IA_ADC_GAIN according to the following 
-// equation:
+// extreme (Tt). Generally, use a Type T thermocouple in
+// liquid nitrogen (-195.8 C) to determine ADC_GAIN_NEG,
+// and a Type K thermocouple in a furnace controlled 
+// to 625 C for ADC_GAIN_POS.
 //
-//    IA_ADC_GAIN = (emf(TCt) - emf(CJt)) / (ADC - IA_ADC_OFFSET)
+// Observe the cold junction temperature (CJt) and the
+// reported thermocouple temperature (TCt), and adjust
+// the appropriate ADC_GAIN value according to the 
+// following equation:
 //
-// The first value is for negative values, i.e.,
-// ADC < IA_ADC_OFFSET; the second is for positive ones.
+//                                   emf(Tt) - emf(CJt)
+//   ADC_GAIN_xxx = (prior value) * -------------------
+//                                  emf(TCt) - emf(CJt)
 //
-far float IA_ADC_GAIN[] = 
-#if SERNO == 2
-	{ 0.014555, 0.014555 };		// calibrated w/ Type T @ 150 C 
-#elif SERNO == 3
-	{ 0.015291, 0.015291 };		// calibrated w/ T @ -195.8 C
-#elif SERNO == 4
-	{ 0.015661, 0.016912 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 5
-	{ 0.015306, 0.015306 };		// calibrated w/ K @ 587 C
-#elif SERNO == 6
-	{ 0.012963, 0.012963 };
-#elif SERNO == 7
-	{ 0.013105, 0.012948 };		// calibrated w/ T @ -195.8 C, K @ 629 C
-#elif SERNO == 8
-	{ 0.01485 , 0.014828 };
-#elif SERNO == 9
-	{ 0.015328, 0.015415 };		// calibrated w/ T @ -195.8 C, K @ 629 C
-//#elif SERNO == 10				// missing
-//	{ 0.012963, 0.012963 };
-#elif SERNO == 11
-	{ 0.016800, 0.017776 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 12
-	{ 0.016777, 0.016455 };
-#elif SERNO == 13
-	{ 0.014876, 0.014643 };
-#elif SERNO == 14
-	{ 0.016546, 0.016419 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 15
-	{ 0.016799, 0.017542 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 16
-	{ 0.016340, 0.016278 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 17
-	{ 0.016898, 0.016479 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 18
-	{ 0.016282, 0.015865 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 19
-	{ 0.016726, 0.016530 };		// calibrated w/ T @ -195.8 C, K @ 625 C
-#elif SERNO == 20
-	{ 0.016371, 0.016294 };		// calibrated w/ T @ -195.8 C, K @ 625 C
+///////////////////////////////////////////////////////
+// Determining CJOffset
+//
+// The nominal CJOffset value would be
+//
+//  ~400 / ADC_GAIN_POS = ~683 counts
+//
+// However, the actual offset varies significantly 
+// from nominal, because of device tolerances and 
+// especially the internal ADC offset.
+//
+// Start with an estimated value near 683.
+//
+// Then adjust each CJOffset by independently
+// measuring each true CJ temperature and comparing
+// it with the value reported by this program.
+// The difference, divided by CJ_GAIN, gives the
+// error between the entered CJOffset and the correct
+// value
+//
+//	CJOffset = (prior value) + (CJt_reported - CJt_true) / CJ_GAIN
+//
+///////////////////////////////////////////////////////
+// SERNOs 10 and below were HC6 revision A and
+// calibrated differently
+///////////////////////////////////////////////////////
+// SERNOs 25 and below were HC6 revision B and
+// calibrated differently
+///////////////////////////////////////////////////////
+
+
+/////////////////////////////////////
+//	CALIBRATION DATA SECTION
+/////////////////////////////////////
+// first of this revision (HC6-C)
+// Aeon calibration station
+#if SERNO == 26
+	#define CJ_OFFSET			724
+	#define IA_ADC_OFFSET		493
+	#define ADC_GAIN_NEG		0.6032
+	#define ADC_GAIN_POS		0.6430
+
+/////////////////////////////////////
+// SMSEGL-12X HC1
+#elif SERNO == 27
+	#define CJ_OFFSET			699
+	#define IA_ADC_OFFSET		509
+	#define ADC_GAIN_NEG		0.5650
+	#define ADC_GAIN_POS		0.5548
+	
+// SMSEGL-12X HC2
+#elif SERNO == 28
+	#define CJ_OFFSET			695
+	#define IA_ADC_OFFSET		522
+	#define ADC_GAIN_NEG		0.5784
+	#define ADC_GAIN_POS		0.5943
+	
+// SMSEGL-12X HC3
+#elif SERNO == 29
+	#define CJ_OFFSET			666
+	#define IA_ADC_OFFSET		506
+	#define ADC_GAIN_NEG		0.5778
+	#define ADC_GAIN_POS		0.5731
+	
+// SMSEGL-12X HC4
+#elif SERNO == 30
+	#define CJ_OFFSET			677
+	#define IA_ADC_OFFSET		498
+	#define ADC_GAIN_NEG		0.5784
+	#define ADC_GAIN_POS		0.5731
+	
+// SMSEGL-12X HC5
+#elif SERNO == 31
+	#define CJ_OFFSET			613
+	#define IA_ADC_OFFSET		483
+	#define ADC_GAIN_NEG		0.6031
+	#define ADC_GAIN_POS		0.5921
+	
+// SMSEGL-12X HC6
+#elif SERNO == 32
+	#define CJ_OFFSET			705
+	#define IA_ADC_OFFSET		496
+	#define ADC_GAIN_NEG		0.5776
+	#define ADC_GAIN_POS		0.5749
+	
+// SMSEGL-12X HC7
+#elif SERNO == 33
+	#define CJ_OFFSET			622
+	#define IA_ADC_OFFSET		499
+	#define ADC_GAIN_NEG		0.6155
+	#define ADC_GAIN_POS		0.6035
+	
+
+/////////////////////////////////////
+// SMSEGL-LL6 HC1
+#elif SERNO == 34
+	#define CJ_OFFSET			697
+	#define IA_ADC_OFFSET		479
+	#define ADC_GAIN_NEG		0.6045
+	#define ADC_GAIN_POS		0.6265
+	
+// SMSEGL-LL6 HC2
+#elif SERNO == 35
+	#define CJ_OFFSET			663
+	#define IA_ADC_OFFSET		508
+	#define ADC_GAIN_NEG		0.5880
+	#define ADC_GAIN_POS		0.5803
+	
+// SMSEGL-LL6 HC3
+#elif SERNO == 36
+	#define CJ_OFFSET			699
+	#define IA_ADC_OFFSET		496
+	#define ADC_GAIN_NEG		0.5875
+	#define ADC_GAIN_POS		0.6208
+	
+// SMSEGL-LL6 HC4
+#elif SERNO == 37
+	#define CJ_OFFSET			770
+	#define IA_ADC_OFFSET		517
+	#define ADC_GAIN_NEG		0.5825
+	#define ADC_GAIN_POS		0.5766
+
+
+/////////////////////////////////////
+// IGGAC Beijing 12X HC1
+#elif SERNO == 38
+	#define CJ_OFFSET			625
+	#define IA_ADC_OFFSET		482
+	#define ADC_GAIN_NEG		0.6058
+	#define ADC_GAIN_POS		0.5979
+	
+// IGGAC Beijing 12X HC2
+#elif SERNO == 39
+	#define CJ_OFFSET			663
+	#define IA_ADC_OFFSET		499
+	#define ADC_GAIN_NEG		0.6028
+	#define ADC_GAIN_POS		0.5934
+	
+// IGGAC Beijing 12X HC3
+#elif SERNO == 40
+	#define CJ_OFFSET			655
+	#define IA_ADC_OFFSET		505
+	#define ADC_GAIN_NEG		0.5731
+	#define ADC_GAIN_POS		0.5641
+	
+// IGGAC Beijing 12X HC4
+#elif SERNO == 41
+	#define CJ_OFFSET			624
+	#define IA_ADC_OFFSET		493
+	#define ADC_GAIN_NEG		0.5987
+	#define ADC_GAIN_POS		0.5855
+	
+// IGGAC Beijing 12X HC5
+#elif SERNO == 42
+	#define CJ_OFFSET			665
+	#define IA_ADC_OFFSET		514
+	#define ADC_GAIN_NEG		0.5655
+	#define ADC_GAIN_POS		0.5585
+	
+// IGGAC Beijing 12X HC6
+#elif SERNO == 43
+	#define CJ_OFFSET			713
+	#define IA_ADC_OFFSET		522
+	#define ADC_GAIN_NEG		0.5898
+	#define ADC_GAIN_POS		0.5793
+	
+// IGGAC Beijing 12X HC7
+#elif SERNO == 44
+	#define CJ_OFFSET			666
+	#define IA_ADC_OFFSET		496
+	#define ADC_GAIN_NEG		0.5939
+	#define ADC_GAIN_POS		0.5869
+	
+// 
+#elif SERNO == 45
+	#define CJ_OFFSET			687
+	#define IA_ADC_OFFSET		511
+	#define ADC_GAIN_NEG		0.5836
+	#define ADC_GAIN_POS		0.5791
+		
+// 
+#elif SERNO == 46
+	#define CJ_OFFSET			653
+	#define IA_ADC_OFFSET		499
+	#define ADC_GAIN_NEG		0.5921
+	#define ADC_GAIN_POS		0.5849
+		
+// 
+#elif SERNO == 47
+	#define CJ_OFFSET			726
+	#define IA_ADC_OFFSET		515
+	#define ADC_GAIN_NEG		0.5768
+	#define ADC_GAIN_POS		0.5692
+		
+// 
+#elif SERNO == 48
+	#define CJ_OFFSET			676
+	#define IA_ADC_OFFSET		498
+	#define ADC_GAIN_NEG		0.5860
+	#define ADC_GAIN_POS		0.5815
+		
+// 
+#elif SERNO == 49
+	#define CJ_OFFSET			710
+	#define IA_ADC_OFFSET		508
+	#define ADC_GAIN_NEG		0.5768
+	#define ADC_GAIN_POS		0.5740
+		
+// 
+#elif SERNO == 50
+	#define CJ_OFFSET			701
+	#define IA_ADC_OFFSET		513
+	#define ADC_GAIN_NEG		0.5742
+	#define ADC_GAIN_POS		0.5716
+		
+// 
+#elif SERNO == 51
+	#define CJ_OFFSET			675
+	#define IA_ADC_OFFSET		479
+	#define ADC_GAIN_NEG		0.5845
+	#define ADC_GAIN_POS		0.5811
+			
+// 
+#elif SERNO == 52
+	#define CJ_OFFSET			654
+	#define IA_ADC_OFFSET		517
+	#define ADC_GAIN_NEG		0.5774
+	#define ADC_GAIN_POS		0.5711
+			
+// 
+#elif SERNO == 53
+	#define CJ_OFFSET			730
+	#define IA_ADC_OFFSET		501
+	#define ADC_GAIN_NEG		0.5712
+	#define ADC_GAIN_POS		0.5704
+				
+// 
+#elif SERNO == 54
+	#define CJ_OFFSET			663
+	#define IA_ADC_OFFSET		495
+	#define ADC_GAIN_NEG		0.6000
+	#define ADC_GAIN_POS		0.5905
+
+// 
+#elif SERNO == 55
+	#define CJ_OFFSET			675
+	#define IA_ADC_OFFSET		503
+	#define ADC_GAIN_NEG		0.5694
+	#define ADC_GAIN_POS		0.5612
+
+// 
+#elif SERNO == 56
+	#define CJ_OFFSET			724
+	#define IA_ADC_OFFSET		502
+	#define ADC_GAIN_NEG		0.5734
+	#define ADC_GAIN_POS		0.5673
+
+// 
+#elif SERNO == 57
+	#define CJ_OFFSET			634
+	#define IA_ADC_OFFSET		485
+	#define ADC_GAIN_NEG		0.6009
+	#define ADC_GAIN_POS		0.5897
+
+// 
+#elif SERNO == 58
+	#define CJ_OFFSET			682
+	#define IA_ADC_OFFSET		493
+	#define ADC_GAIN_NEG		0.5986
+	#define ADC_GAIN_POS		0.5919
+
+// 
+#elif SERNO == 59
+	#define CJ_OFFSET			649
+	#define IA_ADC_OFFSET		474
+	#define ADC_GAIN_NEG		0.5962
+	#define ADC_GAIN_POS		0.5851
+
+// 
+#elif SERNO == 60
+	#define CJ_OFFSET			697
+	#define IA_ADC_OFFSET		510
+	#define ADC_GAIN_NEG		0.6164
+	#define ADC_GAIN_POS		0.5820
+
+// 
+#elif SERNO == 61
+	#define CJ_OFFSET			652
+	#define IA_ADC_OFFSET		506
+	#define ADC_GAIN_NEG		0.6071
+	#define ADC_GAIN_POS		0.7679
+
+// 
+#elif SERNO == 62
+	#define CJ_OFFSET			710
+	#define IA_ADC_OFFSET		526
+	#define ADC_GAIN_NEG		0.6020
+	#define ADC_GAIN_POS		0.7565
+
+// 
+#elif SERNO == TEST
+	#define CJ_OFFSET			579
+	#define IA_ADC_OFFSET		479
+	#define ADC_GAIN_NEG		0.5823
+	#define ADC_GAIN_POS		0.5823
+
+/////////////////////////////////////
+//	END OF CALIBRATION DATA SECTION
+//  Insert values for next serial number 
+//  above this comment.
+/////////////////////////////////////
+
 #endif
 
-	
+
+///////////////////////////////////////////////////////
+// The CJ temperature sensor produces a voltage of
+// approximately 400 + 19.5 mV/degC. To convert ADC
+// counts to degC, we need (mV/count) / (mV/degC)
+#define CJ_GAIN					(ADC_GAIN_POS / 19.5)	// degC/count
+
+
+///////////////////////////////////////////////////////
+// The expected gain of the instrumentation amplifier
+// that feeds the ADC. This figure is usually quite 
+// accurate.
+#define IA_GAIN				(1.0 / 35.65)	// mvIn/mvOut
+
+far float IA_ADC_GAIN[] = 
+{ 
+	IA_GAIN * ADC_GAIN_NEG, 
+	IA_GAIN * ADC_GAIN_POS
+};
+
+
 ///////////////////////////////////////////////////////
 // The CO_RESERVE provides time for the timer interrupt service
 // routines.
@@ -230,14 +431,13 @@ far float IA_ADC_GAIN[] =
 // duty cycle. 
 // The following reserves the maximum number of T0 clock periods that 
 // still generates a true 99% duty cycle output (when 100% is commanded).
-// Must be at least 187 to allow the T0 isr sufficient time to compute 
+// Must be at least 164 to allow the T0 isr sufficient time to compute 
 // the pulse starts (see comment at isr_timer0()).
 //
 // These values are in units of T0 clock periods.
 #define CO_RESERVE				725
 #define CO_MAX					(T0_RESET - CO_RESERVE)
 #define CO_MIN					0
-
 
 ///////////////////////////////////////////////////////
 // Using a random turn-on TRIAC, the average on-time 
@@ -342,7 +542,6 @@ far float IA_ADC_GAIN[] =
 // minimum ON time as a fraction of maximum ON time
 #define MIN_MAX_RATIO			(HC_MIN / HC_MAX)
 
-
 ///////////////////////////////////////////////////////
 // The device co units are hundredths of a percent.
 #define DEVICE_CO_MAX			10000	// == 100%
@@ -352,14 +551,15 @@ far float IA_ADC_GAIN[] =
 // gain for pulse width (converts hundredths of a percent to T0 clock periods):
 #define PW_GAIN					(1.0 * CO_MAX / DEVICE_CO_MAX)
 
-
 #define SP_MIN					-200	// degC
 #define SP_MAX					1000	// degC
 
 #define TEMP_MIN				-300	// degC
 #define TEMP_MAX				2000	// degC
 #define TEMP_ROOM				  20	// degC
+#define TEMP_ROOM_INT			 200	// 10ths degC
 #define TEMP_IMPOSSIBLE			-999.9	// degC
+#define TEMP_IMPOSSIBLE_INT		-9999	// 10ths degC
 
 
 ///////////////////////////////////////////////////////
@@ -368,57 +568,44 @@ far float IA_ADC_GAIN[] =
 #define HTR_PORT(x) 			(x < 4 ? PCOUT : PAOUT)
 
 #define htr_on(x)	mask_clr(HTR_PORT(x), HTR_BIT[(x)])	// set -PWM low
-#define htr_off(x)	mask_set(HTR_PORT(x), HTR_BIT[(x)])	// set -PWM low
+#define htr_off(x)	mask_set(HTR_PORT(x), HTR_BIT[(x)])	// set -PWM high
 #define htrs_off()	mask_set(PCOUT, PC_HTRS), mask_set(PAOUT, PA_HTRS)	// set -PWM high
 
-///////////////////////////////////////////////////////
-typedef char enum { Off, Manual, Auto } Modes;
-
-///////////////////////////////////////////////////////
-typedef char enum { None, TypeK, TypeT } TC_Types;
-#define TC_TYPES_MAX			2
-
-///////////////////////////////////////////////////////
-// CFF == 88 W Watlow ceramic fiber furnace
-// VTC == Aeon VTC cooled by LN
-// VTC_WARM == Aeon VTC without LN
-// HT470 == 470 W, 6-foot heat tape
-typedef char enum { CFF, VTC, VTC_WARM, HT470 } DeviceTypes;
-#define DT_MAX					3
+#define htr_is_on(x)	(HTR_PORT(x) & HTR_BIT[(x)])
 
 
 ///////////////////////////////////////////////////////
 typedef struct
 {
-	uint16_t Kc;		// Controller gain
-	uint16_t Ci;		// 1 / Ti (to avoid float division)
-	uint16_t Cd;		// Kc * Td = gain times dead time
-	uint16_t Cpr;		// 1 / gp (reciprocal of process gain)
-} PidConstants;
-
-///////////////////////////////////////////////////////
-typedef struct
-{
-	TC_Types tcType;
+	char tcType;			// thermocouple type: '~' = None, 'K' = Type K, 'T' = Type T
 	float t;				// temperature, in degrees C
+	int dt;					// change in temperature, in hundredths of a degree C per reading
 	uint16_t error;
 } Thermocouple;
 
 ///////////////////////////////////////////////////////
 typedef struct
 {
-	DeviceTypes devType;	// what kind of heater it is. selects PID constants
-	Modes mode;			// operating mode
-	uint8_t tc;			// thermocouple channel (0..15; default is heater array index)
+	char mode;			// operating mode: '0' = off, 'a' = auto, 'm' = manual
+	int8_t tc;			// thermocouple channel (-1..15; default is heater array index, -1 means none)
 	int sp;				// setpoint (desired pv)
-	uint16_t co;		// in hundredths of a percent (i.e., 10000 means 100.00%)
-	uint16_t coLimit;
+	int co;				// in hundredths of a percent (i.e., 10000 means 100.00%)
+	int coLimit;
 	uint16_t start;		// T0 count for pulse start
 	uint8_t skip;		// number of pulses to skip between delivered pulses
 	volatile uint8_t skipped;	// number of pulses skipped since last delivered pulse
 	uint8_t * CorA;		// pointer to C or A element of Starts element containing this heater
-	float priorPv;		// for Auto (PID) control
-	float integral;		// for Auto (PID) control
+	
+	// PID parameters, for Auto control, tuned by device type
+	// To save space, each parameter is stored in the given units, 
+	// rounded to nearest integer.
+	int Kc;			// Controller gain (stored as 100*Kc)
+	int Ci;			// 1 / Ti (to avoid float division, stored as 100000*Ci)
+	int Cd;			// Kc * Td = gain times dead time, stored as 10*Cd)
+	int Cpr;		// 1 / gp (reciprocal of process gain, stored as 1000*Cpr)
+	float priorPv;		// value of PV during last update
+	float integral;		// accumulated error
+	
 	uint16_t error;
 } Device;
 
@@ -436,20 +623,6 @@ typedef struct
 // global constants
 //
 ///////////////////////////////////////////////////////
-
-
-///////////////////////////////////////////////////////
-// PID parameters, tuned by device type
-// Each parameter is stored in the given units, 
-// rounded to nearest integer.
-far PidConstants K[] =		//	{ 100*Kc, 100000*Ci, 10*Cd, 1000*Cpr }
-{
-	{ 1812, 927, 1793, 760 },		// 0 CF88 furnace (default) (set x25 (max = 25%))
-	{ 2841, 2791, 1250, 10753 },	// 1 VTC cooled by Aluminum thermal conduit in LN (w/ copper wool) (set x16.67)
-	{ 2381, 172, 3571, 678 },		// 2 VTC not cooled	(set x3)
-	{ 6349, 2907, 1667, 8273 },		// 3 470W Heat tape
-};
-
 
 ///////////////////////////////////////////////////////
 // Type T thermocouple emf-temperature approximation polynomial coefficients
@@ -522,30 +695,30 @@ far float TC_K_PT[] =
 //
 // global variables
 //
-//
 // Note: Some rom may be conserved by not intializing 
 // global and static variables, thus using C-defined
 // default values, when possible. I.e., never 
-// intialize a global or static to 0 and use loops
+// intialize a global or static to 0, and use loops
 // to initialize constant data that is repeated.
 //
 ///////////////////////////////////////////////////////
 
 far uint8_t HTR_BIT[HTR_CHANNELS] = { PWM1, PWM2, PWM3, PWM4, PWM5, PWM6 };
 
-volatile uint16_t T0Ticks;					// rolls over when max uint16_t is reached
-//volatile far uint16_t elapsed0;				// DEBUGGING
-//volatile far uint16_t elapsed;				// DEBUGGING
+volatile uint16_t T0Ticks;							// rolls over when max uint16_t is reached
+//volatile far uint16_t elapsed0;					// DEBUGGING
+//volatile far uint16_t elapsed;					// DEBUGGING
 
-volatile BOOL EnableControllerUpdate = TRUE;
-volatile BOOL EnableDatalogging = FALSE;
+far volatile BOOL EnableControllerUpdate = TRUE;
+far volatile BOOL EnableDatalogging;
 
 far Device Htr[HTR_CHANNELS];
 far Thermocouple TC[TC_CHANNELS];
-far float CJt[] = {TEMP_ROOM, TEMP_ROOM};	// thermocouple cold junction temperatures
-far int ADC_TC;								// the ADC reading for TC[t_ioch]
+far float CJt = TEMP_ROOM;						// thermocouple cold junction temperatures
+far int ADC_TC;										// the ADC reading for TC[t_ioch]
 
-volatile Start_t Starts[HTR_CHANNELS];				// co pulse start times, in T0 ticks
+#define MAX_STARTS 		HTR_CHANNELS
+volatile Start_t Starts[MAX_STARTS];				// co pulse start times, in T0 ticks
 volatile Start_t *Start = Starts;					// co pulse start indexer
 volatile uint16_t FirstT1Reset;
 
@@ -563,8 +736,8 @@ volatile uint16_t FirstT1Reset;
 //						// "p is a pointer in far memory that points
 //						// to a char in far memory"
 //
-// far char * far p;	// same as to the immediately preceding example
-// far char* far p;		// same as to the immediately preceding example
+// far char * far p;	// same as the immediately preceding example
+// far char* far p;		// same as the immediately preceding example
 //
 // char *far p;			// p is far, points to a near char
 //						//   equivalent to (char * far) p,
@@ -573,7 +746,7 @@ volatile uint16_t FirstT1Reset;
 //						// to a char in near memory"
 //
 // Because storage specifiers may be placed before or after
-// the type in a declaration, alternative ceclarations are also
+// the type in a declaration, alternative declarations are also
 // possible (e.g., "char far c" is equivalent to "far char c"),
 // but these alternatives are no clearer, and perhaps less clear.
 ///////////////////////////////////////////////////////
@@ -585,26 +758,27 @@ far Device *far h_io = Htr;
 
 far uint8_t t_ioch;							// current tc channel for comms
 far Thermocouple *far t_io = TC;
+#ifdef SUPPRESSION
+	BOOL EnableSuppression;					// suppress TC input when heater is on
+#endif
 
 uint8_t DatalogCount;						// counter for Datalogging
 far uint8_t DatalogReset = 0xFF;			// report every (this many + 1) seconds
 	// Note: 0xFF is used as a disable value (DatalogReset is unsigned)
 	// This is convenient because the reset value needs to be one 
-	// less than the desired count.
+	// less than the desired count.	
 
 far uint8_t selectedTCch;
 far Thermocouple *far selectedTC;
-far TC_Types selectedTCType;
+far char selectedTCType;
 
-far uint8_t selectedCJS;
-far float *far selectedCJTemp;
-far int selectedCJOffset;
-
-far int adc_in;
-far float emf;
+int AdcIn;
+far int StabilityMeter;						// Performance metric
 
 far float *far polynomialVariable;
 far float *far polynomialCoefficients;
+far float emf;
+
 
 //////////////////////////////////////////////////////
 //
@@ -615,7 +789,6 @@ void isr_timer0();
 void isr_timer1();
 void isr_adc();
 
-
 ///////////////////////////////////////////////////////
 // set defaults
 void init_irq()
@@ -623,14 +796,19 @@ void init_irq()
 	uint8_t i;
 	far Device *h = Htr;
 	far Thermocouple *tc = TC;
-
+	
 	htrs_off();
 	
-	for(i = 0; i < TC_CHANNELS; ++i, ++tc)
+	for (i = 0; i < TC_CHANNELS; ++i, ++tc)
+	{
+		tc->tcType = '~';
 		tc->t = TEMP_IMPOSSIBLE;
+		//tc->error = 0;		// default
+	}
 	
 	for (i = 0; i < HTR_CHANNELS; ++i, ++h)
 	{
+		h->mode = '0';	// off
 		h->tc = i;
 		h->coLimit = DEVICE_CO_MAX;
 	}
@@ -638,13 +816,12 @@ void init_irq()
 	SET_VECTOR(TIMER0, isr_timer0);
 	SET_VECTOR(TIMER1, isr_timer1);
 	SET_VECTOR(ADC, isr_adc);
-	
-	TC_select(TC_CHANNELS-1);
+
+	TC_select(selectedTCch = TC_CHANNELS-1);
 	ADC_SELECT(AIN_CJ);
 	adc_reset();
 	
 	EI_T0();
-	//EI_T1();		// dynamically enabled by T0 isr
 	EI_ADC();
 }
 
@@ -681,20 +858,16 @@ BOOL uint16CounterReset(uint16_t *count, uint16_t reset)
 
 
 ///////////////////////////////////////////////////////
-// digital filter
-float filter(float *oldV, float *newV)
-{ return (DFS) * *oldV + (1.0 - DFS) * *newV; }
-
-
-///////////////////////////////////////////////////////
 // evaluate a polynomial in x with coefficients c[]
 float evaluate_polynomial()
 {
 	float x = *polynomialVariable;
-	uint8_t i = polynomialCoefficients[0];		// #terms is first value in coefficient array
-	float sum = polynomialCoefficients[i];
-	while (i > 1)
-		sum = x * sum + polynomialCoefficients[--i];
+	int8_t i = polynomialCoefficients[0];		// #terms is first value in coefficient array
+	float far *coeff = polynomialCoefficients + i;
+	float sum = *coeff;
+	
+	while (--i > 0)
+		sum = x * sum + *--coeff;
 	return sum;
 }
 
@@ -708,10 +881,10 @@ float evaluate_polynomial()
 float CJ_emf()
 {	
 	float mV;
-	polynomialVariable = selectedCJTemp;
-	polynomialCoefficients = (selectedTCType == TypeK) ? TC_K_PT : TC_T_PT;
+	polynomialVariable = &CJt;
+	polynomialCoefficients = (selectedTCType == 'K') ? TC_K_PT : TC_T_PT;
 	mV = evaluate_polynomial();
-	if (selectedTCType == TypeK) mV += *polynomialVariable * 0.0008359 + 0.0138456;
+	if (selectedTCType == 'K') mV += *polynomialVariable * 0.0008359 + 0.0138456;
 	return mV;
 }
 
@@ -720,7 +893,7 @@ float CJ_emf()
 // determine the sensed emf, in mV, based on the adc reading
 float TC_emf()
 { 
-	float dADC = adc_in - IA_ADC_OFFSET;
+	float dADC = AdcIn - IA_ADC_OFFSET;
 	return dADC * IA_ADC_GAIN[dADC > 0];
 }
 
@@ -729,26 +902,28 @@ float TC_emf()
 // thermocouple type and emf. 
 float TC_temp()
 {
+
 	emf = CJ_emf();
 	emf += TC_emf();
-	polynomialVariable = &emf;
-	
-	if (selectedTCType == TypeK)
+
+	polynomialVariable = &emf;	
+	if (selectedTCType == 'K')
 	{
-		if (emf < 0)
+		if (emf < 0.0)
 			polynomialCoefficients = TC_K_N;
 		else if (emf < 20.644 )
 			polynomialCoefficients = TC_K_L;
 		else
 			polynomialCoefficients = TC_K_H;
 	}
-	else					// tcType == TypeT
+	else					// tcType == 'T'
 	{
 		if (emf < 0)
 			polynomialCoefficients = TC_T_N;
 		else
 			polynomialCoefficients = TC_T_P;
-	} 
+	}
+	
 	return evaluate_polynomial();
 }
 
@@ -761,22 +936,105 @@ BOOL validTemp(float *t)
 ///////////////////////////////////////////////////////
 void update_tc()
 {	
-	float oldt, newt = TEMP_IMPOSSIBLE;
+	float newt = TEMP_IMPOSSIBLE;
+	float t;
+#ifndef RAW_TC
+	float f, dt, ddt;
+	float clip, ddtClip, attenuate;
+	 BOOL neg;
+#endif
+	uint16_t error = selectedTC->error;
 	
-	if (selectedTCch == t_ioch) ADC_TC = adc_in;
-	if (selectedTCType == None)
-		/* done */ ;
-	else if (adc_in == ADC_OUTOFRANGE)
-		mask_set(selectedTC->error, ERROR_ADC);
+	if (selectedTCch == t_ioch) ADC_TC = AdcIn;
+	if (selectedTCType == '~')
+		error = 0;
+	else if (AdcIn == ADC_OUTOFRANGE)
+		mask_set(error, ERROR_ADC);
 	else
 	{
-		mask_clr(selectedTC->error, ERROR_ADC);
-		oldt = selectedTC->t;
-		newt = TC_temp();
-		if (validTemp(&oldt) && validTemp(&newt))
-			newt = filter(&oldt, &newt);
+		mask_clr(error, ERROR_ADC);
+		t = TC_temp();
+		if (validTemp(&t))
+		{
+			mask_clr(error, ERROR_PV);
+			newt = t;
+
+#ifndef RAW_TC
+			// temperature filter
+			t = selectedTC->t;		// t == oldt	
+			if (validTemp(&t))
+			{
+				// This custom filter is designed to reject the
+				// frequent spurious "spikes" seen in thermocouple
+				// readings, which are often caused by noise from
+				// heater power control.
+				f = newt - t;				// apparent rate (change in temperature)
+				dt = selectedTC->dt * 0.01;	// prior rate; degC / reading
+				ddt = f - dt;				// apparent change in rate			
+
+				// Filter warm temperatures to suppress spikes. The smoother PV
+				// curve enables less erratic CO control.
+				#define DT_CLIP_WARM 1.3
+				#define ATTENUATE_WARM 0.03
+				#define DDT_CLIP_WARM (DT_CLIP_WARM * DT_CLIP_WARM)
+
+				// LN cooling rates can be much faster than heating
+				// rates, so spikes are harder to remove. Excessive rate 
+				// suppression causes windup and oscillation.
+				#define DT_CLIP_COLD 3.0
+				#define ATTENUATE_COLD 0.0433
+				#define DDT_CLIP_COLD (DT_CLIP_COLD * DT_CLIP_COLD)
+
+				if (newt > 15.0)
+				{					
+					clip = DT_CLIP_WARM;
+					ddtClip = DDT_CLIP_WARM;
+					attenuate = ATTENUATE_WARM;
+				}
+				else				
+				{
+					clip = DT_CLIP_COLD;
+					ddtClip = DDT_CLIP_COLD;
+					attenuate = ATTENUATE_COLD;
+				}
+
+				ddt *= ddt;
+				if (ddt > ddtClip)
+					ddt = ddtClip;			// clip excessive change in rate
+				if (f < dt)
+					ddt = -ddt;
+				
+				ddt *= attenuate;
+				dt += ddt;
+				if (dt > clip)				// also clip excessive rate
+					dt = clip;
+				else if (dt < -clip)
+					dt = -clip;
+				
+				newt = t + dt;
+				
+				#ifdef TC_AVERAGING
+					// an exponential weighted averaging filter
+					f = newt - t;
+					f *= f * 1000.0;
+					if (f < 1.0)
+					{
+						newt *= f;
+						newt += t * (1 - f);
+						dt = newt - t;
+					}
+				#endif
+					
+				selectedTC->dt = dt * 100.0;
+			}
+#endif
+
+ 		}
+		else
+			mask_set(error, ERROR_PV);
 	}
 	selectedTC->t = newt;
+	selectedTC->error = error;
 }
 
 
@@ -785,71 +1043,127 @@ void update_tc()
 // Which sensor is selected depends on the selected TC channel.
 void update_cjt()
 {
-	float oldt, newt;
+	float newt;
 	
-	if (selectedCJOffset == NO_CJ_SENSOR)
-		newt = TEMP_ROOM;
-	else if (adc_in == ADC_OUTOFRANGE)
+	if (AdcIn == ADC_OUTOFRANGE)
 		newt = TEMP_IMPOSSIBLE;
 	else
 	{
-		oldt = *selectedCJTemp;
-		newt = CJ_GAIN * (adc_in - selectedCJOffset);
-		newt = filter(&oldt, &newt);
+		newt = CJ_GAIN * (AdcIn - CJ_OFFSET);
+		newt = 0.99 * CJt + 0.01 * newt;
 	}
-	*selectedCJTemp = newt;
+	CJt = newt;
 }
+
+
+#ifdef SUPPRESSION
+///////////////////////////////////////////////////////
+// Whether any heater is receiving a control output pulse.
+BOOL aHeaterIsOn()
+{
+	return FirstT1Reset > 0 && (T0 < 5000 || T0 > FirstT1Reset);
+}
+#endif
 
 
 ///////////////////////////////////////////////////////
 void check_adc()
 {
-	BOOL ainWasTC;
+	static BOOL cjIsSelected = TRUE;
 	uint8_t nextTCch = selectedTCch;
+#ifdef SUPPRESSION
+	BOOL suppress = EnableSuppression && aHeaterIsOn();
+#endif
+	BOOL cjWasSelected = cjIsSelected;
+	char tcType;
+	static BOOL connected;
 	
+	int prior_adc_in = AdcIn;
+	int stabilityTest;
+	static uint8_t stabilityCounter;
+	
+#ifdef SUPPRESSION
+	if (AdcdSettling || suppress) return;
+#else
 	if (AdcdSettling) return;
-	adc_in = ADCD;
+#endif
+	AdcIn = ADCD;
 	
-	if (ADCD_VALID(adc_in))
-		adc_in >>= 3;						// adcd = (adcd >> 3) + ADC_OFFSET;
-	else
-		adc_in = ADC_OUTOFRANGE;
+	if (ADCD_VALID(AdcIn))
+	{
+		AdcIn >>= 3;
+		
+		if (connected)		// check for stability
+		{			
+			stabilityTest = AdcIn - prior_adc_in;
+			if (stabilityTest < 0) stabilityTest = -stabilityTest;
 
-	// select the next input to be measured
-	ainWasTC = SELECTED_ADC_CHANNEL == AIN_TC;
-	if (ainWasTC)							// the analog input was a thermocouple
-	{
-		if (selectedTCch == TC_CHANNELS-1)	// if it was the last one
-			ADC_SELECT(AIN_CJ);				// switch to checking the CJ sensors
-		else								// else, select the next TC
-			TC_select(nextTCch = selectedTCch+1);
+			if (stabilityTest > ADC_DELTA_LIMIT)	// significantly different
+			{
+				stabilityCounter = 0;
+			}
+			else
+			{
+				++stabilityCounter;
+				++StabilityMeter;
+			}
+			
+			if (stabilityCounter < ADC_STABLE)		// unstable
+				return;								// take another reading
+			stabilityCounter = 0;
+		}
 	}
-	else									// a CJ sensor is selected
+	else
+		AdcIn = ADC_OUTOFRANGE;
+
+	// select the next channel or cold junction to measure
+	if (selectedTCch == TC_CHANNELS - 1)
+	{ 
+		cjIsSelected = TRUE;
+		nextTCch = 0;
+	}
+	else
 	{
-		if (selectedTCch)					// if selected TC is not channel 0
-			TC_select(nextTCch = 0);		// check the other CJ sensor
+		if (cjIsSelected && selectedTCch == 0)
+			cjIsSelected = FALSE;
 		else
-			ADC_SELECT(AIN_TC);				// switch back to the TCs
-	}
+			++nextTCch;
+	}	
+	
+	tcType = TC[nextTCch].tcType;
 	
 	// Now that the next input to be measured is selected 
-	// into the ADC, start a new measurement.
-	adc_reset();
-
-	// Finally, interpret the voltage just read for
-	// the correct device and then update the selectedX
-	// variables to the now-selected channel.
-	if (ainWasTC)
-		update_tc();
+	// into the ADC, start a new measurement if something
+	// is connected to the input.
+	if (cjIsSelected)
+	{
+		connected = TRUE;
+		ADC_SELECT(AIN_CJ);
+		TC_select(nextTCch);
+		adc_reset();
+	}
 	else
-		update_cjt();
+	{
+		connected = tcType != '~';
+		if (connected)
+		{
+			TC_select(nextTCch);
+			ADC_SELECT(AIN_TC);
+			adc_reset();
+		}		
+	}
 	
+	// Finally, interpret the voltage just read for
+	// the correct device
+	if (cjWasSelected)
+		update_cjt();
+	else
+		update_tc();
+	
+	// Update the selectedX variables to the now-selected channel.
 	selectedTCch = nextTCch;
 	selectedTC = TC + selectedTCch;
-	selectedTCType = selectedTC->tcType;
-	selectedCJS = selectedTCch > 7;
-	selectedCJTemp = CJt + selectedCJS;
-	selectedCJOffset = CJOffset[selectedCJS];
+	selectedTCType = tcType;
 }
 
 
@@ -874,8 +1188,8 @@ void updateStarts()
 	Start_t *next;
 	Start_t *prior;
 	uint16_t reset;
-
-//elapsed0 = T0;
+	
+	//elapsed0 = T0;
 	// Disable all control outputs until the workload 
 	// is established
 	FirstT1Reset = 0;
@@ -954,7 +1268,7 @@ void update_output(far Device *h)
 	uint8_t skip;
 	float s;
 
-	if (h->error || h->mode == Off || co <= 0)
+	if (h->error || h->mode == '0' || co <= 0)
 	{
 		setStart(h, h->skip = h->skipped = 0);
 	}
@@ -980,21 +1294,23 @@ void setCO(far Device *h, uint16_t newco)
 ///////////////////////////////////////////////////////
 void pid(far Device *h, float *pv)
 {
-	far PidConstants *k = K + h->devType;
-	float Kc = 0.01 * k->Kc;		// Kc = controller gain
-	float Ci = 0.00001 * k->Ci;		// Ci = 1 / Ti (note: no Kc)
-	float Cd = 0.1 * k->Cd;		// Cd = Kc * Td
-	float Cpr = 0.001 * k->Cpr;		// Cpr = 1 / gp  (= step test dCO/dPV)
+	// convert PID parameters from stored units to floats
+	float Kc = 0.01 * h->Kc;		// Kc = controller gain
+	float Ci = 0.00001 * h->Ci;		// Ci = 1 / Ti (note: no Kc)
+	float Cd = 0.1 * h->Cd;			// Cd = Kc * Td
+	float Cpr = 0.001 * h->Cpr;		// Cpr = 1 / gp  (= step test dCO/dPV)
 
 	float ref = h->sp;				// ref is momentarily setpoint
 	
 	float co = Kc * (ref - *pv);	// the p term
 	
+#ifndef PI_CONTROL
 	// The following line should not be executed
 	// on the first pass (when entering auto mode).
 	// Alternatively, h->priorPv could be set to *pv
 	// before the first call to pid().
 	co += Cd * (h->priorPv - *pv);	// plus the d term
+#endif
 
 	// Ideally, the integral term always equals the co that
 	// corresponds to the current pv.
@@ -1022,28 +1338,37 @@ void pid(far Device *h, float *pv)
 ///////////////////////////////////////////////////////
 void update_device(far Device *h)
 {
-	far Thermocouple *tc = TC + h->tc;
-	float t = tc->t;
+	far Thermocouple *tc = TC + h->tc;		// valid only when h->tc > 0
+	float t = tc->t;						// valid only when h->tc > 0
+	uint16_t error = h->error;
+		
+	if (tc->error)
+		mask_set(error, ERROR_PV);
+	else
+		mask_clr(error, ERROR_PV);
 	
-	mask_clr(h->error, ERROR_NO_TC);
-	mask_clr(h->error, ERROR_PV);
-	
-	if (h->mode == Auto)
+	if (h->mode == 'a')
 	{
-		if (tc->tcType == None)
-			mask_set(h->error, ERROR_NO_TC);
-		else if (tc->error || !validTemp(&t))
-			mask_set(h->error, ERROR_PV);
-		else
+		if (h->tc < 0 || tc->tcType == '~')
+			mask_set(error, ERROR_NO_TC);
+		if (!error)
 			pid(h, &t);
 	}
+	else
+		mask_clr(error, ERROR_NO_TC);
+	h->error = error;
 }
 
 
 ///////////////////////////////////////////////////////
 void update_controller()
 {
-	check_adc();	
+//	static int n = 0;
+//	if (n++ > 6)
+//	{
+		check_adc();	
+//		n = 0;
+//	}
 	if (EnableControllerUpdate)
 	{
 		EnableControllerUpdate = FALSE;		// re-enabled later by isr_timer0
@@ -1053,60 +1378,84 @@ void update_controller()
 }
 
 
-///////////////////////////////////////////////////////
-void report_header()
+////////////////////////////////////////////////////////
+void selectHeater()
 {
-	printromstr(R"C DM TCT _POWER POWMAX SETP __TEMP ___CJT Error");
-	endMessage();
+	h_ioch = TryInput(0, HTR_CHANNELS - 1, ERROR_CHANNEL, h_ioch, 0);
+	h_io = Htr + h_ioch;
 }
 
+
 ////////////////////////////////////////////////////////
-void report_device()
+void selectThermocouple()
 {
-	uint8_t tch = h_io->tc;
-	far Thermocouple *tc = TC + tch;
-	
+	t_ioch = TryInput(0, TC_CHANNELS-1, ERROR_TC_CH, t_ioch, 0);
+	t_io = TC + t_ioch;
+}
+
+
+////////////////////////////////////////////////////////
+void reportHeaterState(far Device *h)
+{
+	putc(h->mode); printSpace();
+	printdec(h->co, 6, ' ', 2); printSpace();
+}
+
+
+////////////////////////////////////////////////////////
+void reportHeater()
+{
 	printi(h_ioch, 1, ' '); printSpace();
-	printi(h_io->devType, 1, ' ');
-	printi(h_io->mode, 1, ' '); printSpace();
-	printi(tch, 2, ' ');
-	printi(tc->tcType, 1, ' '); printSpace();
-	printdec(h_io->co, 6, ' ', 2); printSpace();
-	printdec(h_io->coLimit, 6, ' ', 2); printSpace();
 	printi(h_io->sp, 4, ' '); printSpace();
-	printfarTenths(&(tc->t), 6, ' '); printSpace();
-	printfarTenths(CJt + (tch > 7 ? 1 : 0), 6, ' '); printSpace();
+	reportHeaterState(h_io);
+	printdec(h_io->coLimit, 6, ' ', 2); printSpace();
+	printi(h_io->tc, 2, ' '); printSpace();
+	printi(h_io->Kc, 6, ' '); printSpace();
+	printi(h_io->Ci, 6, ' '); printSpace();
+	printi(h_io->Cd, 6, ' '); printSpace();
+	printi(h_io->Cpr, 6, ' '); printSpace();
 	printi(Error | h_io->error, 5, ' ');
-	
-//	printSpace();
-//	printi(elapsed, 6, ' ');
-	
-//	printSpace();
-//	printi(h_io->skip, 2, ' ');
-	
-//	printSpace();
-//	printi(h_io->start, 6, ' ');
-	
-	endMessage();
-}
-
-
-///////////////////////////////////////////////////////
-void report_tc_header()
-{
-	printromstr(R"CH T __TEMP ___CJT Error");
 	endMessage();
 }
 
 
 ////////////////////////////////////////////////////////
-void report_tc()
+void reportTemperature(far float *t)
+{
+	printdec(*t * 10.0, 6, ' ', 1); printSpace();
+}
+
+
+////////////////////////////////////////////////////////
+void reportTC()
 {
 	printi(t_ioch, 2, ' '); printSpace();
-	printi(t_io->tcType, 1, ' '); printSpace();
-	printfarTenths(&(t_io->t), 6, ' '); printSpace();
-	printfarTenths(CJt + (t_ioch > 7 ? 1 : 0), 6, ' '); printSpace();
+	putc(t_io->tcType); printSpace();
+	reportTemperature(&(t_io->t));
 	printi(Error | t_io->error, 5, ' ');
+	endMessage();
+}
+
+
+////////////////////////////////////////////////////////
+void reportDataDump()
+{
+	uint8_t i;
+	
+	// report all temperatures
+	for (i = 0; i < TC_CHANNELS; ++i)
+		reportTemperature(&(TC[i].t));
+	endLine();
+
+	// report all heater states
+	for (i = 0; i < HTR_CHANNELS; ++i)
+		reportHeaterState(Htr+i);
+	endLine();
+	
+	// report cold junction temperatures
+	reportTemperature(&CJt);
+	endLine();
+	printi(StabilityMeter, 6, ' ');
 	endMessage();
 }
 
@@ -1114,130 +1463,147 @@ void report_tc()
 ///////////////////////////////////////////////////////
 void do_commands()
 {
-	char c;
-	BOOL tcCommand = FALSE;
+	char c, c2;
+	int n;
 
-	while (!RxbEmpty())				// process a command
+	while (!RxbEmpty())					// process a command
 	{
-		c = getc();		
 		mask_clr(Error, ERROR_COMMAND);
-		
-		// single-byte commands
-		if (c == '\0')				// null command
+		GetInput();
+		c = Command[0];					// a command
+		c2 = Command[1];				// possibly a sub-command
+
+		// the alternative switch() construction consumes ~74 bytes more codespace
+		if (c == '\0')					// null command
 		{
-			// (treat as single-byte command that does nothing)
+			// do nothing
 		}
-		else if (c == 'z')			// program data
+		else if (c == 'r')				// report
 		{
-			printromstr(FIRMWARE); printromstr(VERSION); endMessage();
-			printromstr(R"S/N:"); printi(SERNO, 4, ' '); endMessage();
-			printromstr(R"TC:"); printi(t_ioch, 3, ' '); printromstr(R" ADC:"); printi(ADC_TC, 5, ' '); endMessage();
-			endMessage();
+			if (NargPresent)			// set Datalogging interval
+			{
+				// rolls under to 0xFF if DatalogReset was 0
+				DatalogReset = TryInput(0, 255, ERROR_DATALOG, DatalogReset + 1, 0) - 1;
+				DatalogCount = 0;
+			}
+			else						// one-time report
+			{
+				reportDataDump();
+			}
 		}
-		else if (c == 'h')			// report header
+		else if (c == '0')				// turn heater Off
 		{
-			report_header();
-		}
-		else if (c == 'a')			// start PID control
-		{
-			h_io->mode = Auto;
-			h_io->integral = -1;
-		}
-		else if (c == '0')			// turn it Off
-		{
-			h_io->mode = Off;
+			h_io->mode = c;
 			update_output(h_io);
 		}
-		else						// multi-byte command
+		else if (c == 's')				// set setpoint
 		{
-			if (c == 't')			// thermocouple command
+			h_io->sp = TryInput(SP_MIN, SP_MAX, ERROR_SETPOINT, h_io->sp, 0);
+		}
+		else if (c == 'h')				// heater report
+		{
+			if (c2 == 't')				// associate thermcouple with this heater
 			{
-				tcCommand = TRUE;
-				c = getc();			// get the sub-command
+				h_io->tc = TryInput(-1, TC_CHANNELS-1, ERROR_TC_CH, h_io->tc, 0);
 			}
-			getArgs();
-
-			if (tcCommand)
+			else
 			{
-				if (c == 'r')		// thermocouple report
-				{
-					report_tc();
-				}
-				else if (c == 'n')	// select thermocouple channel
-				{
-					t_ioch = tryArg(0, TC_CHANNELS-1, ERROR_TC_CH, t_ioch, FALSE);
-					t_io = TC + t_ioch;
-				}
-				else if (c == 't')	// set thermocouple type
-				{
-					t_io->tcType = tryArg(0, TC_TYPES_MAX, ERROR_TC_TYPE, t_io->tcType, FALSE);
-				}
-				else if (c == 'h')	// show thermocouple report header
-				{
-					report_tc_header();
-				}
-				else if (c == 'c')	// associate thermcouple channel with heater channel
-				{
-					// Unlike the other 't' commands, this one has nothing 
-					// to do with the currently selected TC channel. Instead, it
-					// sets the TC channel for the currently selected heater to
-					// the supplied argument. It's really a 2-byte heater
-					// command, not a tcCommand.
-					h_io->tc = tryArg(0, TC_CHANNELS-1, ERROR_TC_CH, h_io->tc, FALSE);
-				}
-				else				// unrecognized command
-				{
-					mask_set(Error, ERROR_COMMAND);
-				}
-			} 
-			else if (c == 'n')		// select channel
-			{
-				h_ioch = tryArg(0, HTR_CHANNELS - 1, ERROR_CHANNEL, h_ioch, FALSE);
-				h_io = Htr + h_ioch;
+				if (NargPresent) selectHeater();
+				reportHeater();
 			}
-			else if (c == 'r')		// report
+		}
+		else if (c == 'n')				// select channel
+		{
+			selectHeater();
+		}
+ 		else if (c == 'a')				// start auto (PID) control
+		{
+			h_io->mode = c;
+			h_io->integral = -1;
+		}
+		else if (c == 'm')				// manual mode
+		{
+			if (NargPresent)			// manage control output manually
 			{
-				if (argPresent())	// set Datalogging interval
-				{
-					// rolls under to 0xFF if DatalogReset was 0
-					DatalogReset = tryArg(0, 255, ERROR_DATALOG, DatalogReset + 1, FALSE) - 1;
-					DatalogCount = 0;
-				}
-				else				// one-time report
-					report_device();
+				if (h_io->mode == 'a') h_io->mode = c;		// don't turn it on if it's off
+				setCO(h_io, TryInput(0, h_io->coLimit, ERROR_CO, h_io->co, 2));
 			}
-			else if (c == 'm')
+			else
 			{
-				h_io->mode = Manual;
-				if (argPresent())	// manage control output manually
-					setCO(h_io, tryArg(0, h_io->coLimit, ERROR_CO, h_io->co, TRUE));
-				else
-					update_output(h_io);
+				h_io->mode = c;
+				update_output(h_io);
 			}
-			else if (c == 's')		// set setpoint
+		}
+		else if (c == 't')				// thermocouple command
+		{
+			if (c2 == '\0')				// thermocouple report
 			{
-				h_io->sp = tryArg(SP_MIN, SP_MAX, ERROR_SETPOINT, h_io->sp, FALSE);
+				if (NargPresent) selectThermocouple();
+				reportTC();
 			}
-			else if (c == 'x')		// set maximum control output
+			else if (c2 == 'n')			// select thermocouple channel
 			{
-				h_io->coLimit = tryArg(0, DEVICE_CO_MAX, ERROR_COMAX, h_io->coLimit, TRUE);
+				selectThermocouple();
 			}
-			else if (c == 'd')		// set device type
+			else if (c2 == '~' || c2 == 'K' || c2 == 'T')
 			{
-				h_io->devType = tryArg(0, DT_MAX, ERROR_DEV_TYPE, h_io->devType, FALSE);
+				t_io->tcType = c2;
 			}
-			else					// unrecognized command
+			else						// unrecognized command
 			{
 				mask_set(Error, ERROR_COMMAND);
 			}
+		}
+		else if (c == 'x')				// set maximum control output
+		{
+			h_io->coLimit = TryInput(0, DEVICE_CO_MAX, ERROR_COMAX, h_io->coLimit, 2);
+		}
+		else if (c == 'c')				// configuration command
+		{
+			n = TryInput(0, INT_MAX, ERROR_CONFIG, 0, 0);
+			if (!(Error & ERROR_CONFIG))
+			{
+				if (c2 == 'k')			// controller gain (Kc)
+					h_io->Kc = n;
+				else if (c2 == 'i')		// Ci = 1 / Ti (to avoid float division)
+					h_io->Ci = n;
+				else if (c2 == 'd')		// Cd = Kc * Td = gain times dead time
+					h_io->Cd = n;
+				else if (c2 == 'r')		// Cpr = 1 / gp (reciprocal of process gain)
+					h_io->Cpr = n;
+				else					// unrecognized command
+					mask_set(Error, ERROR_COMMAND);
+			}
+		}
+#ifdef SUPPRESSION
+		else if (c == 'i')				// toggle interference suppression
+		{
+			INVERT(&EnableSuppression);
+		}
+#endif		
+		else if (c == 'z')				// program data
+		{
+			printromstr(FIRMWARE); printromstr(VERSION); endLine();
+			printromstr(R"S/N:"); printi(SERNO, 4, ' '); endLine();
+			printromstr(R"H:"); printi(h_ioch, 2, ' ');
+			printromstr(R" T:"); printi(t_ioch, 3, ' '); endLine();
+			printromstr(R"ADC:"); printi(ADC_TC, 6, ' ');
+#ifdef SUPPRESSION			
+			if (EnableSuppression) putc('!');
+#endif			
+			endMessage();
+		}
+		else							// unrecognized command
+		{
+			mask_set(Error, ERROR_COMMAND);
 		}
 	}
 	
 	if (EnableDatalogging)
 	{
-		EnableDatalogging = FALSE;	// re-enabled later by isr_timer0
+		EnableDatalogging = FALSE;		// re-enabled later by isr_timer0
 		if (DatalogReset != 0xFF && uint8CounterReset(&DatalogCount, DatalogReset))
-			report_device();
+			reportDataDump();
 	}
 }
 
@@ -1248,21 +1614,22 @@ void setCOStarts()
 {
 	far Device *h = Htr;
 	uint8_t i;
-
+	
+	// Clear all C & A values
+	for (i = 0; i < MAX_STARTS; ++i)
+		*((int *)(Starts + i)) = 0;
+	
 	for (i = 0; i < HTR_CHANNELS; ++i, ++h)
 	{
 		if (h->start)
 		{
-			if (h->skipped < h->skip)
-			{
-				mask_clr(*(h->CorA), HTR_BIT[i]);
-				h->skipped++;
-			}
-			else
+			if (h->skipped >= h->skip)
 			{
 				mask_set(*(h->CorA), HTR_BIT[i]);
 				h->skipped = 0;			// it's getting a pulse this time
 			}
+			else
+				h->skipped++;
 		}
 	}
 	Start = Starts;
@@ -1270,15 +1637,15 @@ void setCOStarts()
 
 
 ///////////////////////////////////////////////////////
-// As many as 187 T0 clock periods may elapse between 
+// As many as 164 T0 clock periods may elapse between 
 // the start of timer0's isr and the completion of 
 // setCOStarts().
 void interrupt isr_timer0()
 {
 //elapsed0 = T0;
-	DI_T0();
+//	DI_T0();
 //	EI_ADC();
-	EI();
+//	EI();
 
 	++T0Ticks;
 	
@@ -1306,8 +1673,8 @@ void interrupt isr_timer0()
 if (ONE_SECOND)
 	EnableDatalogging = TRUE;
 	
-	DI();
-	EI_T0();
+//	DI();
+//	EI_T0();
 }
 
 
@@ -1317,8 +1684,6 @@ if (ONE_SECOND)
 // isr_timer1() and its completion.
 void interrupt isr_timer1()
 {
-//	DI_ADC();	// avoid adc reads when power is on
-	
 //elapsed0 = T0;
 	mask_clr(PCOUT, Start->C);
 	mask_clr(PAOUT, Start->A);
@@ -1334,7 +1699,7 @@ void interrupt isr_timer1()
 
 
 ///////////////////////////////////////////////////////
-// ADC read complete...
+// ADC complete...
 void interrupt isr_adc()
 { 
 	if (AdcdSettling)
