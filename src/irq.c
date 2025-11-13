@@ -20,9 +20,9 @@
 
 // Store big strings in ROM to conserve RData and EData space.
 rom char FIRMWARE[]	= R"Aeon Laboratories HC6-C ";
-rom char VERSION[]	= R"V.20230109-0000";
+rom char VERSION[]	= R"V.20251113-0000";
 
-#define SERNO					60
+#define SERNO					75
 
 #define TC_CHANNELS				16
 #define HTR_CHANNELS			6
@@ -326,66 +326,244 @@ rom char VERSION[]	= R"V.20230109-0000";
 				
 // 
 #elif SERNO == 54
-	#define CJ_OFFSET			663
-	#define IA_ADC_OFFSET		495
-	#define ADC_GAIN_NEG		0.6000
-	#define ADC_GAIN_POS		0.5905
+	#define CJ_OFFSET			660
+	#define IA_ADC_OFFSET		496
+	#define ADC_GAIN_NEG		0.5993
+	#define ADC_GAIN_POS		0.5929
 
 // 
 #elif SERNO == 55
-	#define CJ_OFFSET			675
+	#define CJ_OFFSET			650
 	#define IA_ADC_OFFSET		503
-	#define ADC_GAIN_NEG		0.5694
-	#define ADC_GAIN_POS		0.5612
+	#define ADC_GAIN_NEG		0.5719
+	#define ADC_GAIN_POS		0.5632
 
 // 
 #elif SERNO == 56
-	#define CJ_OFFSET			724
+	#define CJ_OFFSET			690
 	#define IA_ADC_OFFSET		502
-	#define ADC_GAIN_NEG		0.5734
-	#define ADC_GAIN_POS		0.5673
+	#define ADC_GAIN_NEG		0.5770
+	#define ADC_GAIN_POS		0.5692
 
 // 
 #elif SERNO == 57
-	#define CJ_OFFSET			634
+	#define CJ_OFFSET			657
 	#define IA_ADC_OFFSET		485
-	#define ADC_GAIN_NEG		0.6009
-	#define ADC_GAIN_POS		0.5897
+	#define ADC_GAIN_NEG		0.6006
+	#define ADC_GAIN_POS		0.5917
 
 // 
 #elif SERNO == 58
-	#define CJ_OFFSET			682
+	#define CJ_OFFSET			672
 	#define IA_ADC_OFFSET		493
-	#define ADC_GAIN_NEG		0.5986
-	#define ADC_GAIN_POS		0.5919
+	#define ADC_GAIN_NEG		0.6018
+	#define ADC_GAIN_POS		0.5937
 
 // 
 #elif SERNO == 59
-	#define CJ_OFFSET			649
+	#define CJ_OFFSET			676
 	#define IA_ADC_OFFSET		474
-	#define ADC_GAIN_NEG		0.5962
-	#define ADC_GAIN_POS		0.5851
+	#define ADC_GAIN_NEG		0.5946
+	#define ADC_GAIN_POS		0.5880
 
 // 
 #elif SERNO == 60
-	#define CJ_OFFSET			697
+	#define CJ_OFFSET			677
 	#define IA_ADC_OFFSET		510
-	#define ADC_GAIN_NEG		0.6164
-	#define ADC_GAIN_POS		0.5820
+	#define ADC_GAIN_NEG		0.5904
+	#define ADC_GAIN_POS		0.5840
 
 // 
 #elif SERNO == 61
-	#define CJ_OFFSET			652
+	#define CJ_OFFSET			650
 	#define IA_ADC_OFFSET		506
-	#define ADC_GAIN_NEG		0.6071
-	#define ADC_GAIN_POS		0.7679
+	#define ADC_GAIN_NEG		0.5810
+	#define ADC_GAIN_POS		0.5752
 
 // 
 #elif SERNO == 62
-	#define CJ_OFFSET			710
-	#define IA_ADC_OFFSET		526
-	#define ADC_GAIN_NEG		0.6020
-	#define ADC_GAIN_POS		0.7565
+	#define CJ_OFFSET			708
+	#define IA_ADC_OFFSET		525
+	#define ADC_GAIN_NEG		0.5726
+	#define ADC_GAIN_POS		0.5659
+
+// 
+#elif SERNO == 63
+	#define CJ_OFFSET			680
+	#define IA_ADC_OFFSET		513
+	#define ADC_GAIN_NEG		0.573
+	#define ADC_GAIN_POS		0.5685
+	
+// 
+#elif SERNO == 64
+	#define CJ_OFFSET			663
+	#define IA_ADC_OFFSET		490
+	#define ADC_GAIN_NEG		0.5946
+	#define ADC_GAIN_POS		0.5886
+	
+// 
+#elif SERNO == 65
+	#define CJ_OFFSET			690
+	#define IA_ADC_OFFSET		500
+	#define ADC_GAIN_NEG		0.5853
+	#define ADC_GAIN_POS		0.5795
+	
+// 
+#elif SERNO == 66
+	#define CJ_OFFSET			642
+	#define IA_ADC_OFFSET		501
+	#define ADC_GAIN_NEG		0.5855
+	#define ADC_GAIN_POS		0.5818
+
+// 
+#elif SERNO == 67
+	#define CJ_OFFSET			662
+	#define IA_ADC_OFFSET		479
+	#define ADC_GAIN_NEG		0.6000
+	#define ADC_GAIN_POS		0.5981
+
+// 
+#elif SERNO == 68
+	#define CJ_OFFSET			701
+	#define IA_ADC_OFFSET		495
+	#define ADC_GAIN_NEG		0.5888
+	#define ADC_GAIN_POS		0.5858
+
+// 
+#elif SERNO == 69
+	#define CJ_OFFSET			653
+	#define IA_ADC_OFFSET		498
+	#define ADC_GAIN_NEG		0.6016
+	#define ADC_GAIN_POS		0.5911
+
+// 
+#elif SERNO == 70
+	#define CJ_OFFSET			640
+	#define IA_ADC_OFFSET		493
+	#define ADC_GAIN_NEG		0.5964
+	#define ADC_GAIN_POS		0.5884
+
+// 
+#elif SERNO == 71
+	#define CJ_OFFSET			669
+	#define IA_ADC_OFFSET		497
+	#define ADC_GAIN_NEG		0.5931
+	#define ADC_GAIN_POS		0.5851
+
+// 
+#elif SERNO == 72
+	#define CJ_OFFSET			646
+	#define IA_ADC_OFFSET		478
+	#define ADC_GAIN_NEG		0.5928
+	#define ADC_GAIN_POS		0.5863
+
+// 
+#elif SERNO == 73
+	#define CJ_OFFSET			636
+	#define IA_ADC_OFFSET		504
+	#define ADC_GAIN_NEG		0.5973
+	#define ADC_GAIN_POS		0.5874
+
+// 
+#elif SERNO == 74
+	#define CJ_OFFSET			690
+	#define IA_ADC_OFFSET		523
+	#define ADC_GAIN_NEG		0.5777
+	#define ADC_GAIN_POS		0.5719
+
+// 
+#elif SERNO == 75
+	#define CJ_OFFSET			671
+	#define IA_ADC_OFFSET		524
+	#define ADC_GAIN_NEG		0.5644
+	#define ADC_GAIN_POS		0.5563
+
+// 
+#elif SERNO == 76
+	#define CJ_OFFSET			683
+	#define IA_ADC_OFFSET		502
+	#define ADC_GAIN_NEG		0.5974
+	#define ADC_GAIN_POS		0.5911
+
+// 
+#elif SERNO == 77
+	#define CJ_OFFSET			652
+	#define IA_ADC_OFFSET		475
+	#define ADC_GAIN_NEG		0.6023
+	#define ADC_GAIN_POS		0.5965
+
+#elif SERNO == 78
+	#define CJ_OFFSET			656
+	#define IA_ADC_OFFSET		524
+	#define ADC_GAIN_NEG		0.5750
+	#define ADC_GAIN_POS		0.5660
+
+#elif SERNO == 79
+	#define CJ_OFFSET			676
+	#define IA_ADC_OFFSET		504
+	#define ADC_GAIN_NEG		0.5864
+	#define ADC_GAIN_POS		0.5761
+
+#elif SERNO == 80
+	#define CJ_OFFSET			623
+	#define IA_ADC_OFFSET		496
+	#define ADC_GAIN_NEG		0.5972
+	#define ADC_GAIN_POS		0.5882
+
+#elif SERNO == 81
+	#define CJ_OFFSET			656
+	#define IA_ADC_OFFSET		508
+	#define ADC_GAIN_NEG		0.5791
+	#define ADC_GAIN_POS		0.5711
+
+#elif SERNO == 82
+	#define CJ_OFFSET			669
+	#define IA_ADC_OFFSET		515
+	#define ADC_GAIN_NEG		0.5672
+	#define ADC_GAIN_POS		0.5597
+
+#elif SERNO == 83
+	#define CJ_OFFSET			680
+	#define IA_ADC_OFFSET		505
+	#define ADC_GAIN_NEG		0.5883
+	#define ADC_GAIN_POS		0.5798
+
+#elif SERNO == 84
+	#define CJ_OFFSET			662
+	#define IA_ADC_OFFSET		516
+	#define ADC_GAIN_NEG		0.5842
+	#define ADC_GAIN_POS		0.5766
+
+#elif SERNO == 85
+	#define CJ_OFFSET			659
+	#define IA_ADC_OFFSET		498
+	#define ADC_GAIN_NEG		0.6025
+	#define ADC_GAIN_POS		0.5904
+
+#elif SERNO == 86
+	#define CJ_OFFSET			664
+	#define IA_ADC_OFFSET		492
+	#define ADC_GAIN_NEG		0.5742
+	#define ADC_GAIN_POS		0.5646
+	
+#elif SERNO == 87
+	#define CJ_OFFSET			679
+	#define IA_ADC_OFFSET		511
+	#define ADC_GAIN_NEG		0.5978
+	#define ADC_GAIN_POS		0.5880
+
+#elif SERNO == 88
+	#define CJ_OFFSET			693
+	#define IA_ADC_OFFSET		498
+	#define ADC_GAIN_NEG		0.6004
+	#define ADC_GAIN_POS		0.5908
+
+#elif SERNO == 89
+	#define CJ_OFFSET			659
+	#define IA_ADC_OFFSET		503
+	#define ADC_GAIN_NEG		0.5816
+	#define ADC_GAIN_POS		0.5744
+
 
 // 
 #elif SERNO == TEST
@@ -1342,7 +1520,7 @@ void update_device(far Device *h)
 	float t = tc->t;						// valid only when h->tc > 0
 	uint16_t error = h->error;
 		
-	if (tc->error)
+	if (h->tc >= 0 && tc->error)
 		mask_set(error, ERROR_PV);
 	else
 		mask_clr(error, ERROR_PV);
